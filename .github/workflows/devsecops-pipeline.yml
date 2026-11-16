@@ -117,6 +117,7 @@ jobs:
 
       # 2. Análisis SCA con OWASP Dependency-Check
       # Politica: CVSS >= 7.0 (High/Critical) detiene el build (--failOnCVSS 7)
+      # Excepciones documentadas y con vencimiento: dependency-check-suppressions.xml
       - name: OWASP Dependency-Check Scan
         uses: dependency-check/Dependency-Check_Action@main
         with:
@@ -130,6 +131,7 @@ jobs:
             --enableExperimental
             --nodeAuditSkipDevDependencies
             --nodePackageSkipDevDependencies
+            --suppression dependency-check-suppressions.xml
 
       - name: Resumen de hallazgos SCA
         if: always()
