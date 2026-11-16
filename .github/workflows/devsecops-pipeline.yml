@@ -1,0 +1,199 @@
+name: DevSecOps Pipeline
+
+# Tarea Semana 07 - Seguridad en Aplicaciones (UMG)
+# SAST (Semgrep) + SBOM CycloneDX (Syft) + SCA (OWASP Dependency-Check) + Quality Gate
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # FASE 2: SAST con Semgrep
+  # ---------------------------------------------------------------------------
+  sast-semgrep:
+    name: "SAST - Semgrep Code Scanning"
+    runs-on: ubuntu-latest
+    # Imagen oficial de Semgrep (reemplaza a la accion semgrep/semgrep-action@v1, ya obsoleta)
+    container:
+      image: semgrep/semgrep
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+
+      - name: Ejecutar Semgrep (p/security-audit + p/owasp-top-ten)
+        run: |
+          semgrep scan \
+            --config p/security-audit \
+            --config p/owasp-top-ten \
+            --sarif-output=semgrep-results.sarif \
+            --json-output=semgrep-results.json
+
+      - name: Subir artefacto SARIF de Semgrep
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: semgrep-sarif-report
+          path: |
+            semgrep-results.sarif
+            semgrep-results.json
+
+      # Politica: cualquier hallazgo ERROR / HIGH / CRITICAL detiene el build
+      - name: "Quality Gate SAST: fallar con hallazgos ERROR/HIGH"
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys, collections
+          BLOCK = {"ERROR", "HIGH", "CRITICAL"}
+          results = json.load(open("semgrep-results.json"))["results"]
+          sev = collections.Counter(r["extra"]["severity"] for r in results)
+          blocking = [r for r in results if r["extra"]["severity"] in BLOCK]
+          out = ["## SAST - Semgrep", "",
+                 "Total de hallazgos: **%d**" % len(results), "",
+                 "| Severidad | Cantidad |", "|---|---|"]
+          out += ["| %s | %d |" % kv for kv in sorted(sev.items())]
+          out += ["", "### Hallazgos bloqueantes (ERROR/HIGH/CRITICAL): %d" % len(blocking), ""]
+          if blocking:
+              out += ["| Severidad | Archivo | Linea | Regla | CWE |", "|---|---|---|---|---|"]
+              for r in blocking:
+                  cwe = r["extra"].get("metadata", {}).get("cwe", "")
+                  cwe = cwe[0] if isinstance(cwe, list) and cwe else cwe
+                  out.append("| %s | %s | %d | %s | %s |" % (
+                      r["extra"]["severity"], r["path"], r["start"]["line"],
+                      r["check_id"].split(".")[-1], str(cwe).split(":")[0]))
+          verdict = "FAIL" if blocking else "PASS"
+          out += ["", "**Quality Gate SAST: %s**" % verdict]
+          text = "\n".join(out)
+          print(text)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write(text + "\n")
+          sys.exit(1 if blocking else 0)
+          EOF
+
+  # ---------------------------------------------------------------------------
+  # FASE 3: SBOM (CycloneDX) + SCA (OWASP Dependency-Check)
+  # ---------------------------------------------------------------------------
+  sca-and-sbom:
+    name: "SCA & Generación de SBOM"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+
+      # 1. Generación del SBOM en Estándar CycloneDX
+      - name: Generar SBOM con Syft (CycloneDX JSON)
+        uses: anchore/sbom-action@v0
+        with:
+          format: cyclonedx-json
+          output-file: "sbom.cyclonedx.json"
+          upload-artifact: false
+
+      - name: Subir artefacto SBOM (CycloneDX)
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cyclonedx.json
+
+      - name: Vista previa del SBOM
+        run: |
+          echo "===== Primeras 30 lineas ====="
+          head -n 30 sbom.cyclonedx.json
+          echo "===== Estructura de un componente (marked) ====="
+          jq '[.components[] | select(.name=="marked")][0]' sbom.cyclonedx.json
+          {
+            echo "## SBOM CycloneDX (Syft)"
+            echo ""
+            echo "- bomFormat: $(jq -r .bomFormat sbom.cyclonedx.json)"
+            echo "- specVersion: $(jq -r .specVersion sbom.cyclonedx.json)"
+            echo "- serialNumber: $(jq -r .serialNumber sbom.cyclonedx.json)"
+            echo "- Componentes: $(jq '.components | length' sbom.cyclonedx.json)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # 2. Análisis SCA con OWASP Dependency-Check
+      # Politica: CVSS >= 7.0 (High/Critical) detiene el build (--failOnCVSS 7)
+      - name: OWASP Dependency-Check Scan
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: 'AppSegura'
+          path: '.'
+          format: 'HTML'
+          out: 'reports'
+          args: >
+            --format JSON
+            --failOnCVSS 7
+            --enableExperimental
+            --nodeAuditSkipDevDependencies
+            --nodePackageSkipDevDependencies
+
+      - name: Resumen de hallazgos SCA
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import json, os
+          data = json.load(open("reports/dependency-check-report.json"))
+          def score(v):
+              s = [v.get(k, {}).get(f, 0) for k, f in
+                   (("cvssv4", "baseScore"), ("cvssv3", "baseScore"), ("cvssv2", "score"))]
+              return max([float(x or 0) for x in s] + [0.0])
+          rows, supp = [], 0
+          for d in data.get("dependencies", []):
+              supp += len(d.get("suppressedVulnerabilities", []))
+              pkg = (d.get("packages") or [{}])[0].get("id", d.get("fileName", ""))
+              for v in d.get("vulnerabilities", []):
+                  rows.append((score(v), v.get("severity", "").upper(), pkg, v.get("name", "")))
+          rows.sort(reverse=True)
+          high = [r for r in rows if r[0] >= 7.0]
+          out = ["## SCA - OWASP Dependency-Check", "",
+                 "- Dependencias analizadas: **%d**" % len(data.get("dependencies", [])),
+                 "- Vulnerabilidades reportadas: **%d**" % len(rows),
+                 "- Con CVSS >= 7.0 (bloqueantes): **%d**" % len(high),
+                 "- Suprimidas (excepciones documentadas): **%d**" % supp, ""]
+          if high:
+              out += ["| CVSS | Severidad | Paquete | Vulnerabilidad |", "|---|---|---|---|"]
+              out += ["| %.1f | %s | %s | %s |" % r for r in high]
+          out += ["", "**Quality Gate SCA: %s**" % ("FAIL" if high else "PASS")]
+          text = "\n".join(out)
+          print(text)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write(text + "\n")
+          EOF
+
+      - name: Subir Reporte SCA
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dependency-check-report
+          path: reports/
+
+  # ---------------------------------------------------------------------------
+  # FASE 4: Quality Gate consolidado
+  # ---------------------------------------------------------------------------
+  quality-gate:
+    name: "Quality Gate (HIGH/CRITICAL)"
+    runs-on: ubuntu-latest
+    needs: [ sast-semgrep, sca-and-sbom ]
+    if: always()
+    steps:
+      - name: Evaluar política de seguridad
+        run: |
+          echo "SAST (Semgrep):          ${{ needs.sast-semgrep.result }}"
+          echo "SCA  (Dependency-Check): ${{ needs.sca-and-sbom.result }}"
+          {
+            echo "## Quality Gate"
+            echo ""
+            echo "| Control | Criterio | Resultado |"
+            echo "|---|---|---|"
+            echo "| SAST Semgrep | Sin hallazgos ERROR/HIGH | ${{ needs.sast-semgrep.result }} |"
+            echo "| SCA Dependency-Check | Sin CVSS >= 7.0 | ${{ needs.sca-and-sbom.result }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ needs.sast-semgrep.result }}" != "success" ] || [ "${{ needs.sca-and-sbom.result }}" != "success" ]; then
+            echo "::error::Quality Gate NO superado: existen hallazgos de severidad HIGH/CRITICAL."
+            exit 1
+          fi
+          echo "Quality Gate superado: sin hallazgos HIGH/CRITICAL pendientes."
