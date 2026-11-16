@@ -103,7 +103,7 @@ jobs:
       - name: Vista previa del SBOM
         run: |
           echo "===== Primeras 30 lineas ====="
-          head -n 30 sbom.cyclonedx.json
+          jq . sbom.cyclonedx.json | head -n 30
           echo "===== Estructura de un componente (marked) ====="
           jq '[.components[] | select(.name=="marked")][0]' sbom.cyclonedx.json
           {
