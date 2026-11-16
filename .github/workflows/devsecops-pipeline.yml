@@ -142,7 +142,11 @@ jobs:
           def score(v):
               s = [v.get(k, {}).get(f, 0) for k, f in
                    (("cvssv4", "baseScore"), ("cvssv3", "baseScore"), ("cvssv2", "score"))]
-              return max([float(x or 0) for x in s] + [0.0])
+              best = max([float(x or 0) for x in s] + [0.0])
+              # Dependency-Check trata como 10.0 los advisories HIGH/CRITICAL sin vector CVSS
+              if best == 0.0 and v.get("severity", "").upper() in ("HIGH", "CRITICAL"):
+                  best = 10.0
+              return best
           rows, supp = [], 0
           for d in data.get("dependencies", []):
               supp += len(d.get("suppressedVulnerabilities", []))
