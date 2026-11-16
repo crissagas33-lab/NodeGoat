@@ -10,13 +10,14 @@
 
   <suppress until="2027-02-28Z">
     <notes><![CDATA[
-      bson 1.0.9 (deserializacion insegura). Dependencia transitiva del driver mongodb 2.x.
+      mongodb 2.2.36 (denegacion de servicio) y bson 1.0.9 (deserializacion insegura), su
+      dependencia transitiva.
       La correccion exige migrar a mongodb >= 3.1.13, cambio mayor de API que rompe la capa
       de datos (app/data/*). Riesgo aceptado temporalmente: la aplicacion es un laboratorio
       local sin exposicion externa. Plan: migrar el driver de MongoDB.
     ]]></notes>
-    <packageUrl regex="true">^pkg:npm/bson@1\.0\.9$</packageUrl>
-    <vulnerabilityName>GHSA-v8w9-2789-6hhr</vulnerabilityName>
+    <packageUrl regex="true">^pkg:npm/(bson@1\.0\.9|mongodb@2\.2\.36)$</packageUrl>
+    <vulnerabilityName regex="true">^(GHSA-v8w9-2789-6hhr|GHSA-mh5c-679w-hh4r)$</vulnerabilityName>
   </suppress>
 
   <suppress until="2027-02-28Z">
@@ -43,14 +44,15 @@
 
   <suppress until="2027-02-28Z">
     <notes><![CDATA[
-      minimatch 3.0.8, braces 2.3.2 (ReDoS) y nconf 0.10.0 (prototype pollution). Transitivas
+      minimatch 3.0.8, braces 2.3.2, decode-uri-component 0.2.2 (ReDoS / DoS) y nconf 0.10.0
+      (prototype pollution). Transitivas
       del gestor de procesos forever 2.x (forever-monitor, chokidar, flatiron). La correccion
       requiere forever >= 4 (cambio mayor). forever solo vigila el proceso y los archivos
       locales; los patrones y la configuracion los define el operador, no las peticiones HTTP.
       Plan: actualizar forever a 4.x o sustituirlo por el reinicio del orquestador (Docker).
     ]]></notes>
-    <packageUrl regex="true">^pkg:npm/(minimatch@3\.0\.8|braces@2\.3\.2|nconf@0\.10\.0)$</packageUrl>
-    <vulnerabilityName regex="true">^(GHSA-7r86-cg39-jmmj|GHSA-23c5-xmqv-rm74|GHSA-grv7-fg5c-xmjg|GHSA-6xwr-q98w-rvg7)$</vulnerabilityName>
+    <packageUrl regex="true">^pkg:npm/(minimatch@3\.0\.8|braces@2\.3\.2|decode-uri-component@0\.2\.2|nconf@0\.10\.0)$</packageUrl>
+    <vulnerabilityName regex="true">^(GHSA-7r86-cg39-jmmj|GHSA-23c5-xmqv-rm74|GHSA-3ppc-4f35-3m26|GHSA-grv7-fg5c-xmjg|GHSA-qr28-fpjm-wq7f|GHSA-6xwr-q98w-rvg7)$</vulnerabilityName>
   </suppress>
 
 </suppressions>
